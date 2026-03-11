@@ -9,6 +9,7 @@ from app.services.phq9_service import PHQ9Service
 from app.services.conversational_phq9_service import ConversationalPHQ9Service
 from app.api.chat.schemas import ChatRequest, ChatHistoryResponse, ChatMessageResponse
 from app.models.chat_message import ChatMessage
+from app.models.assessment import DepressionDetection
 from app.models.user import User
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
@@ -68,40 +69,50 @@ async def chat_stream(
     phq9_question = None
     
     if active_assessment:
-        # Si el usuario acaba de responder, guardar la respuesta
-        if active_assessment.current_question <= 9:
-            # Verificar si este mensaje es respuesta a la pregunta anterior
-            last_messages = await ollama_service.get_chat_history(db, user_email, limit=2)
-            if len(last_messages) >= 1:
-                # Guardar respuesta del usuario
-                await conversational_phq9.save_user_response(
-                    db, 
-                    active_assessment, 
-                    payload.message
-                )
-                # Recargar assessment después de guardar
-                db.refresh(active_assessment)
+        # Si está esperando respuesta, guardar la respuesta del usuario
+        if active_assessment.waiting_for_response:
+            await conversational_phq9.save_user_response(
+                db, 
+                active_assessment, 
+                payload.message
+            )
+            # Recargar assessment después de guardar
+            db.refresh(active_assessment)
         
         # Determinar si incluir siguiente pregunta PHQ-9
-        if conversational_phq9.should_ask_next_question(active_assessment, messages_threshold=3):
-            phq9_question = conversational_phq9.get_next_question(active_assessment)
+        # Threshold=1 permite 1 mensaje de conversación entre preguntas
+        if conversational_phq9.should_ask_next_question(active_assessment, messages_threshold=1):
+            phq9_question = conversational_phq9.get_next_question(db, active_assessment)
+            if phq9_question:
+                print(f"📋 Enviando pregunta PHQ-9: {phq9_question}")
         else:
-            # Incrementar contador de mensajes
-            conversational_phq9.increment_message_counter(db, active_assessment)
+            # Solo incrementar contador si NO está esperando respuesta
+            if not active_assessment.waiting_for_response:
+                conversational_phq9.increment_message_counter(db, active_assessment)
     
     async def event_generator():
-        async for chunk in ollama_service.chat_stream(
-            payload.message, 
-            db, 
-            user_email,
-            payload.use_context,
-            phq9_question=phq9_question
-        ):
-            # Server-Sent Events format
-            yield f"data: {chunk}\n\n"
-        
-        # Indicar fin del stream
-        yield "data: [DONE]\n\n"
+        try:
+            # Enviar mensaje inicial inmediatamente para evitar timeout
+            yield "data: \n\n"
+            
+            async for chunk in ollama_service.chat_stream(
+                payload.message, 
+                db, 
+                user_email,
+                payload.use_context,
+                phq9_question=phq9_question
+            ):
+                # Server-Sent Events format
+                yield f"data: {chunk}\n\n"
+            
+            # Indicar fin del stream
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            print(f"❌ Error en streaming: {e}")
+            import traceback
+            traceback.print_exc()
+            yield f"data: Error: {str(e)}\n\n"
+            yield "data: [DONE]\n\n"
     
     return StreamingResponse(
         event_generator(),
@@ -147,6 +158,7 @@ def get_chat_history(
 ):
     """
     Obtiene el historial de conversación del usuario.
+    Si no tiene mensajes, crea un mensaje de bienvenida automático.
     """
     user = db.query(User).filter(User.email == user_email).first()
     if not user:
@@ -155,6 +167,26 @@ def get_chat_history(
     messages = db.query(ChatMessage).filter(
         ChatMessage.user_id == user.id
     ).order_by(ChatMessage.created_at.asc()).limit(limit).all()
+    
+    # Si no tiene mensajes, crear mensaje de bienvenida
+    if len(messages) == 0:
+        welcome_message = ChatMessage(
+            user_id=user.id,
+            role="assistant",
+            content=f"""¡Hola! 👋 Es un gusto conocerte.
+
+Soy Seren, tu compañero de confianza en este espacio seguro. Estoy aquí para escucharte sin juzgarte, entenderte y acompañarte en lo que necesites.
+
+A veces es difícil encontrar alguien con quien hablar abiertamente. ¿Sabes qué? No tienes que guardar todo para ti. Este es tu espacio.
+
+¿Cómo te sientes hoy? ¿Hay algo en tu mente que te gustaría compartir? Puede ser cualquier cosa: lo que te preocupa, lo que te emociona, o simplemente cómo ha sido tu día.
+
+Estoy aquí para ti. 💙"""
+        )
+        db.add(welcome_message)
+        db.commit()
+        db.refresh(welcome_message)
+        messages = [welcome_message]
     
     return {
         "messages": messages,
@@ -173,11 +205,25 @@ def clear_chat_history(
     user = db.query(User).filter(User.email == user_email).first()
     if not user:
         return {"message": "Usuario no encontrado"}
-    
-    deleted = db.query(ChatMessage).filter(
-        ChatMessage.user_id == user.id
-    ).delete()
-    db.commit()
+
+    try:
+        # Primero eliminar detecciones que referencian mensajes del usuario.
+        user_message_ids = db.query(ChatMessage.id).filter(
+            ChatMessage.user_id == user.id
+        ).subquery()
+
+        db.query(DepressionDetection).filter(
+            DepressionDetection.message_id.in_(user_message_ids)
+        ).delete(synchronize_session=False)
+
+        deleted = db.query(ChatMessage).filter(
+            ChatMessage.user_id == user.id
+        ).delete(synchronize_session=False)
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     
     return {"message": f"{deleted} mensajes eliminados"}
 

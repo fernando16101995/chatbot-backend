@@ -7,7 +7,8 @@ from app.models.user import User
 class OllamaService:
     def __init__(self, base_url: str = "http://localhost:11434"):
         self.base_url = base_url
-        self.model = "llama3.1:8b"
+        self.model = "llama3.2:1b"
+        self.max_response_chars = 500
     
     async def get_chat_history(self, db: Session, user_email: str, limit: int = 10) -> List[Dict[str, str]]:
         """Obtiene el historial de conversación del usuario para contexto"""
@@ -56,18 +57,41 @@ class OllamaService:
         # Construir mensajes para el modelo
         messages = history + [{"role": "user", "content": user_message}]
         
-        # Si hay pregunta PHQ-9, agregar instrucción al sistema
-        if phq9_question:
-            system_prompt = f"""Eres un asistente empático y conversacional. 
-Responde al usuario de manera natural y después, de forma suave y empática, 
-haz esta pregunta: "{phq9_question}"
-
-Integra la pregunta de forma natural en la conversación, mostrando genuino interés."""
-            
-            messages = [{"role": "system", "content": system_prompt}] + messages
-        
         # Guardar mensaje del usuario
         self.save_message(db, user_email, "user", user_message)
+        
+        # Prompt base para mantener el tono del asistente y evitar cortes de conversación.
+        base_system_prompt = f"""Eres Seren, un asistente terapéutico cálido, empático y conversacional.
+
+    Reglas obligatorias:
+    - Responde SIEMPRE en español.
+    - Mantén la respuesta principal breve: máximo {self.max_response_chars} caracteres.
+    - Si el usuario sube el tono o usa lenguaje intenso, NO cierres la conversación ni digas que no puedes continuar.
+    - En esos casos, valida la emoción y redirige con calma para seguir conversando.
+    - Mantén un tono humano, respetuoso y cercano.
+    """
+
+        # Si hay pregunta PHQ-9, instruir a LLaMA para que genere SOLO comentario cálido
+        if phq9_question:
+            system_prompt = base_system_prompt + """
+
+    Ahora mismo hay una evaluación PHQ-9 activa.
+
+IMPORTANTE: Responde con UN COMENTARIO BREVE (1 oración máximo) que sea:
+- Validador y empático con lo que el usuario acaba de decir
+- Un poco arriesgado o provocador de forma amable
+- Que conecte emocionalmente con el usuario
+
+Ejemplos:
+"Entiendo, puede ser frustrante por lo que estás pasando."
+"Eso suena agotador... pero el hecho de que sigas aquí dice mucho de tu fortaleza."
+"Vaya, eso debe ser difícil. A veces nuestro cuerpo nos habla de maneras que ignoramos."
+
+NO hagas ninguna pregunta. SOLO el comentario empático."""
+
+            messages = [{"role": "system", "content": system_prompt}] + messages
+        else:
+            messages = [{"role": "system", "content": base_system_prompt}] + messages
         
         # Hacer request a Ollama con streaming
         payload = {
@@ -78,7 +102,7 @@ Integra la pregunta de forma natural en la conversación, mostrando genuino inte
         
         assistant_response = ""
         
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             async with client.stream(
                 "POST",
                 f"{self.base_url}/api/chat",
@@ -92,14 +116,25 @@ Integra la pregunta de forma natural en la conversación, mostrando genuino inte
                             
                             if "message" in chunk and "content" in chunk["message"]:
                                 content = chunk["message"]["content"]
-                                assistant_response += content
-                                yield content
+                                remaining_chars = self.max_response_chars - len(assistant_response)
+                                if remaining_chars > 0:
+                                    trimmed_content = content[:remaining_chars]
+                                    assistant_response += trimmed_content
+                                    if trimmed_content:
+                                        yield trimmed_content
                             
                             # Ollama envía done: true cuando termina
                             if chunk.get("done", False):
                                 break
                         except json.JSONDecodeError:
                             continue
+        
+        # Si hay pregunta PHQ-9, agregarla después del comentario de LLaMA
+        if phq9_question:
+            phq9_text = f" {phq9_question}"
+            print(f"✅ Agregando pregunta PHQ-9 exacta: {phq9_question}")
+            assistant_response += phq9_text
+            yield phq9_text
         
         # Guardar respuesta completa del asistente
         if assistant_response:

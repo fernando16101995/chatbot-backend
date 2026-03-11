@@ -115,6 +115,7 @@ class PHQ9ConversationalAssessment(Base):
     is_active = Column(Boolean, default=True)  # Si está en progreso
     current_question = Column(Integer, default=1)  # Pregunta actual (1-9)
     messages_since_last_question = Column(Integer, default=0)  # Contador de mensajes
+    waiting_for_response = Column(Boolean, default=False)  # Si se hizo una pregunta y espera respuesta
     
     # Respuestas del usuario (texto libre)
     q1_response = Column(Text, nullable=True)

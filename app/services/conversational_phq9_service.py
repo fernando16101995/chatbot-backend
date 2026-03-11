@@ -101,7 +101,8 @@ class ConversationalPHQ9Service:
             user_id=user_id,
             is_active=True,
             current_question=1,
-            messages_since_last_question=0
+            messages_since_last_question=0,
+            waiting_for_response=False
         )
         db.add(assessment)
         db.commit()
@@ -138,6 +139,10 @@ class ConversationalPHQ9Service:
         if assessment.current_question > 9:
             return False
         
+        # NO hacer pregunta si ya está esperando respuesta
+        if assessment.waiting_for_response:
+            return False
+        
         # Si es la primera pregunta, hacerla inmediatamente
         if assessment.current_question == 1 and assessment.messages_since_last_question == 0:
             return True
@@ -147,13 +152,20 @@ class ConversationalPHQ9Service:
     
     def get_next_question(
         self, 
+        db: Session,
         assessment: PHQ9ConversationalAssessment
     ) -> Optional[str]:
-        """Obtiene la siguiente pregunta PHQ-9 a realizar."""
+        """Obtiene la siguiente pregunta PHQ-9 a realizar y marca que espera respuesta."""
         if assessment.current_question > 9:
             return None
         
         question_data = self.QUESTIONS[assessment.current_question - 1]
+        
+        # Marcar que se hizo la pregunta y esperamos respuesta
+        assessment.waiting_for_response = True
+        assessment.messages_since_last_question = 0
+        db.commit()
+        
         return question_data["question"]
     
     def increment_message_counter(
@@ -184,9 +196,10 @@ class ConversationalPHQ9Service:
         score = await self._infer_score(user_response, question_num)
         setattr(assessment, f"q{question_num}_score", score)
         
-        # Avanzar a siguiente pregunta
+        # Avanzar a siguiente pregunta y ya no esperar respuesta
         assessment.current_question += 1
         assessment.messages_since_last_question = 0
+        assessment.waiting_for_response = False
         
         # Si completó todas las preguntas, finalizar evaluación
         if assessment.current_question > 9:
@@ -224,7 +237,7 @@ Responde SOLO con un JSON:
 }}"""
 
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=45.0) as client:
                 response = await client.post(
                     f"{self.ollama_url}/api/generate",
                     json={
