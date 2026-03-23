@@ -10,9 +10,11 @@ from app.models.assessment import (
     MentalHealthSummary,
     PHQ9ConversationalAssessment
 )
-from app.api.assessment.schemas import PHQ9ResultSchema, DepressionDetectionSchema, MentalHealthSummarySchema
+from app.api.assessment.schemas import PHQ9ResultSchema, DepressionDetectionSchema, MentalHealthSummarySchema, PHQ9AnalyzeRequestSchema
+from app.services.phq9_service import PHQ9Service
 
 router = APIRouter(prefix="/assessment", tags=["Mental Health Assessment"])
+phq9_service = PHQ9Service()
 
 def get_db():
     db = SessionLocal()
@@ -20,6 +22,48 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+@router.post("/phq9/analyze")
+async def analyze_phq9_narrative(
+    request: PHQ9AnalyzeRequestSchema,
+    user_email: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Analiza un texto narrativo largo del usuario y realiza evaluación PHQ-9.
+    
+    - Detecta los 9 síntomas de depresión usando IA
+    - Calcula score total (0-9)
+    - Determina severidad (minimal, mild, moderate, severe)
+    - Guarda resultado en base de datos
+    - Actualiza resumen de salud mental del usuario
+    
+    **Body**: 
+    - `narrative_text`: Texto del usuario a analizar (min 50 caracteres)
+    """
+    
+    # Validar longitud mínima
+    if len(request.narrative_text.strip()) < 50:
+        return {
+            "error": "El texto debe tener al menos 50 caracteres",
+            "total_score": 0,
+            "severity": "unknown"
+        }
+    
+    # Obtener usuario
+    user = db.query(User).filter(User.email == user_email).first()
+    if not user:
+        return {
+            "error": "Usuario no encontrado",
+            "total_score": 0,
+            "severity": "unknown"
+        }
+    
+    # Realizar análisis
+    result = await phq9_service.analyze_narrative(request.narrative_text, user.id, db)
+    
+    return result
 
 
 @router.get("/summary", response_model=MentalHealthSummarySchema)

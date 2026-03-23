@@ -117,6 +117,7 @@ Responde SOLO con este formato JSON:
                 }
                 
                 total_score = 0
+                MIN_CONFIDENCE = 0.60  # Solo contar síntomas con 60%+ de confianza
                 
                 for symptom in analysis['sintomas']:
                     num = symptom['numero']
@@ -126,10 +127,12 @@ Responde SOLO con este formato JSON:
                     q_key = self.QUESTIONS[num - 1]['key']
                     
                     # Guardar predicción (0 o 1)
-                    assessment_data[q_key] = 1 if presente else 0
+                    # Solo contar como presente si tiene confianza suficiente
+                    es_presente = presente and confianza >= MIN_CONFIDENCE
+                    assessment_data[q_key] = 1 if es_presente else 0
                     assessment_data[f"{q_key}_confidence"] = confianza
                     
-                    if presente:
+                    if es_presente:
                         total_score += 1
                 
                 assessment_data['total_score'] = total_score
@@ -162,19 +165,20 @@ Responde SOLO con este formato JSON:
     def _calculate_severity(self, score: int) -> str:
         """
         Calcula la severidad según el score PHQ-9.
-        0-4: Minimal
-        5-9: Mild
-        10-14: Moderate
-        15-19: Moderately severe
-        20-27: Severe
+        UMBRALES CONSERVADORES (más tolerante con síntomas leves-moderados)
+        0-5: Minimal (sin síntomas o muy leves)
+        6-11: Mild (síntomas leves)
+        12-17: Moderate (síntomas moderados)
+        18-23: Moderately severe (síntomas severos)
+        24-27: Severe (síntomas muy severos - solo los casos más críticos)
         """
-        if score <= 4:
+        if score <= 5:
             return "minimal"
-        elif score <= 9:
+        elif score <= 11:
             return "mild"
-        elif score <= 14:
+        elif score <= 17:
             return "moderate"
-        elif score <= 19:
+        elif score <= 23:
             return "moderately_severe"
         else:
             return "severe"
@@ -194,12 +198,21 @@ Responde SOLO con este formato JSON:
         summary.latest_phq9_date = datetime.utcnow()
         summary.total_phq9_assessments += 1
         
-        # Actualizar riesgo general
-        if severity in ["severe", "moderately_severe"]:
+        # Actualizar riesgo general (más conservador)
+        if severity == "severe":
+            # Solo severe dispara alerta inmediata
             summary.overall_risk_level = "severe"
             summary.requires_attention = True
+        elif severity == "moderately_severe":
+            # Moderately severe es preocupación pero no emergencia
+            summary.overall_risk_level = "moderately_severe"
+            # No dispara alert automática, solo registra
         elif severity == "moderate":
             summary.overall_risk_level = "moderate"
+        else:
+            # mild y minimal no son preocupantes
+            if summary.overall_risk_level not in ["severe", "moderately_severe"]:
+                summary.overall_risk_level = severity
         
         db.commit()
     

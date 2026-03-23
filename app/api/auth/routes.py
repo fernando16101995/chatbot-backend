@@ -6,6 +6,7 @@ from app.models.chat_message import ChatMessage
 from app.models.user import User
 from app.api.auth.schemas import UserRegister, UserResponse, LoginRequest, TokenResponse
 from app.core.security import hash_password, verify_password, create_access_token
+from app.core.dependencies import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -100,3 +101,24 @@ Cuéntame, ¿qué hay en tu mente? 💙"""
 
     token = create_access_token({"sub": user.email})
     return {"access_token": token, "token_type": "bearer"}
+
+
+@router.get("/me")
+def get_current_user_info(
+    user_email: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Obtiene información del usuario autenticado"""
+    user = db.query(User).filter(User.email == user_email).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usuario no encontrado"
+        )
+    
+    return {
+        "id": user.id,
+        "email": user.email,
+        "is_admin": user.is_admin,
+        "is_active": user.is_active
+    }

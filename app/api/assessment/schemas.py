@@ -2,6 +2,18 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 
+class PHQ9AnalyzeRequestSchema(BaseModel):
+    """Schema para solicitar análisis de narrativa PHQ-9"""
+    narrative_text: str
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "narrative_text": "He estado muy triste últimamente, no tengo energía para nada, he perdido el interés en mis actividades favoritas..."
+            }
+        }
+
+
 class PHQ9ResultSchema(BaseModel):
     id: int
     total_score: int
