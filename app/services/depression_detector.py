@@ -5,6 +5,7 @@ Analiza mensajes del usuario en español para detectar patrones depresivos.
 
 import httpx
 import json
+import re
 from typing import Dict
 from sqlalchemy.orm import Session
 from app.models.assessment import DepressionDetection, MentalHealthSummary
@@ -52,7 +53,12 @@ Responde SOLO con este formato JSON:
                 )
                 
                 result = response.json()
-                analysis = json.loads(result['response'])
+                raw = result['response']
+                # Extraer JSON aunque LLaMA agregue texto extra alrededor
+                match = re.search(r'\{.*\}', raw, re.DOTALL)
+                if not match:
+                    raise ValueError(f"No se encontró JSON en la respuesta de LLaMA: {raw[:200]}")
+                analysis = json.loads(match.group())
                 
                 # Guardar detección en BD
                 detection = DepressionDetection(
@@ -80,7 +86,7 @@ Responde SOLO con este formato JSON:
                 }
                 
         except Exception as e:
-            print(f"Error en detección: {e}")
+            print(f"❌ Error en detección de depresión (user={user_id}, msg={message_id}): {e}")
             return {
                 "detected": False,
                 "confidence": 0.0,

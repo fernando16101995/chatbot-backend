@@ -5,6 +5,7 @@ Analiza narrativas largas del usuario y predice síntomas PHQ-9.
 
 import httpx
 import json
+import re
 from typing import Dict, List
 from sqlalchemy.orm import Session
 from app.models.assessment import PHQ9Assessment, MentalHealthSummary
@@ -108,7 +109,11 @@ Responde SOLO con este formato JSON:
                 )
                 
                 result = response.json()
-                analysis = json.loads(result['response'])
+                raw = result['response']
+                match = re.search(r'\{.*\}', raw, re.DOTALL)
+                if not match:
+                    raise ValueError(f"No se encontró JSON en la respuesta de LLaMA: {raw[:200]}")
+                analysis = json.loads(match.group())
                 
                 # Procesar resultados
                 assessment_data = {
@@ -155,7 +160,9 @@ Responde SOLO con este formato JSON:
                 }
                 
         except Exception as e:
-            print(f"Error en análisis PHQ-9: {e}")
+            import traceback
+            print(f"❌ Error en análisis PHQ-9 (user={user_id}): {e}")
+            traceback.print_exc()
             return {
                 "error": str(e),
                 "total_score": 0,
