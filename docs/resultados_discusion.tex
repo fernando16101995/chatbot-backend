@@ -160,14 +160,22 @@ PHQ-9 conv. (score exacto)   & 71.1\%               & 64.4\%               & -6.
 \section{Sensibilidad vs Especificidad}
 % ─────────────────────────────────────────────────────────────────────────────
 
-\begin{figure}[H]
+\begin{table}[H]
 \centering
-\includegraphics[width=0.8\textwidth]{figures/sensitivity_specificity_seren.png}
 \caption{Comparación de Sensitivity y Specificity entre los tres módulos de IA de Seren.
          Todos priorizan sensitivity (recall) sobre specificity, apropiado para
          screening de salud mental.}
-\label{fig:sens_spec_seren}
-\end{figure}
+\label{tab:sens_spec_seren}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Módulo}                  & \textbf{Sensitivity} & \textbf{Specificity} \\
+\midrule
+Detector de Depresión            & \textbf{93.2\%}      & 82.4\%               \\
+PHQ-9 Narrativo (macro)          & \textbf{90.3\%}      & 87.7\%               \\
+PHQ-9 Conversacional             & \textbf{93.3\%}      & 71.1\%               \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \textbf{Observación consistente:}
 Los tres módulos exhiben \textbf{sensitivity $>$ specificity}, lo cual es deseable en
