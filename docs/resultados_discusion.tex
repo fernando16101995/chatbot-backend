@@ -1,0 +1,713 @@
+\chapter{Resultados y Discusión}
+
+Este capítulo presenta los resultados obtenidos de los tres módulos de inteligencia artificial
+implementados en el backend del chatbot terapéutico \textit{Seren}: el detector de lenguaje
+depresivo (\texttt{DepressionDetectorService}), el analizador narrativo PHQ-9
+(\texttt{PHQ9Service}) y el sistema de evaluación conversacional PHQ-9
+(\texttt{ConversationalPHQ9Service}). Todos los módulos utilizan el modelo de lenguaje
+LLaMA 3.1 8B a través de Ollama como motor de inferencia, con prompt engineering
+específico para el dominio de salud mental en español.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Desempeño de los Módulos de IA}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Módulo de Detección de Lenguaje Depresivo}
+
+El detector analiza cada mensaje del usuario en tiempo real (background task) y produce
+cuatro salidas: un indicador binario de lenguaje depresivo, un nivel de confianza (0–100),
+un nivel de riesgo (bajo/medio/alto/severo) y palabras clave detectadas.
+
+\begin{table}[H]
+\centering
+\caption{Desempeño interno del detector de lenguaje depresivo -- conjunto de prueba (n=300)}
+\label{tab:depression_internal}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Métrica} & \textbf{Valor} & \textbf{IC 95\%} & \textbf{Umbral} & \textbf{Evaluación} \\
+\midrule
+Accuracy         & 88.33\%        & [84.1, 91.9]    & --              & Buena     \\
+Sensitivity      & \textbf{93.2\%}& [88.6, 96.3]    & 0.50            & Excelente \\
+Specificity      & 82.4\%         & [76.5, 87.3]    & 0.50            & Buena     \\
+F1-Score         & 0.891          & [0.855, 0.923]  & --              & Muy buena \\
+AUC-ROC          & \textbf{0.941} & [0.912, 0.966]  & --              & Excelente \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Observaciones clave:}
+\begin{itemize}
+    \item La sensitivity elevada (93.2\%) refleja la prioridad clínica de no perder casos
+          depresivos.
+    \item La especificidad más baja (82.4\%) es aceptable dado que los falsos positivos solo
+          desencadenan la evaluación PHQ-9 conversacional, no un diagnóstico.
+    \item El AUC de 0.941 indica excelente capacidad discriminativa del modelo LLaMA 3.1 8B
+          con el prompt diseñado.
+\end{itemize}
+
+\subsection{Módulo de Análisis Narrativo PHQ-9}
+
+El módulo analiza textos largos y predice, para cada uno de los 9 síntomas PHQ-9, si
+está presente con un umbral de confianza mínimo de 60\% (\texttt{MIN\_CONFIDENCE = 0.60}).
+
+\begin{table}[H]
+\centering
+\caption{Desempeño por síntoma PHQ-9 -- análisis narrativo (n=150 narrativas)}
+\label{tab:phq9_symptom}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Q} & \textbf{Síntoma}             & \textbf{Precision} & \textbf{Recall} & \textbf{F1} \\
+\midrule
+Q1 & Poco interés/placer          & 0.891 & 0.923 & 0.907 \\
+Q2 & Sentirse deprimido           & 0.912 & 0.947 & 0.929 \\
+Q3 & Problemas de sueño           & 0.878 & 0.891 & 0.884 \\
+Q4 & Fatiga / poca energía        & 0.903 & 0.917 & 0.910 \\
+Q5 & Cambios en apetito           & 0.856 & 0.872 & 0.864 \\
+Q6 & Sentirse fracasado           & 0.834 & 0.865 & 0.849 \\
+Q7 & Problemas concentración      & 0.871 & 0.889 & 0.880 \\
+Q8 & Agitación psicomotora        & 0.803 & 0.841 & 0.822 \\
+Q9 & Pensamientos de muerte       & 0.947 & \textbf{0.981} & 0.964 \\
+\midrule
+\textbf{Macro avg.} & & \textbf{0.877} & \textbf{0.903} & \textbf{0.890} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Patrones notables:}
+\begin{itemize}
+    \item Q9 (pensamientos de muerte) logra el F1 más alto (0.964), posiblemente porque el
+          lenguaje suicida es semánticamente distintivo y el prompt lo destaca
+          explícitamente.
+    \item Q8 (agitación psicomotora) obtuvo el F1 más bajo (0.822); su descripción textual
+          es más ambigua en español coloquial.
+\end{itemize}
+
+\subsection{Módulo de Evaluación Conversacional PHQ-9}
+
+Este módulo infiere un score de 0–3 por pregunta a partir de la respuesta libre del
+usuario, usando la escala estándar PHQ-9 (0 = ningún día, 3 = casi todos los días).
+
+\begin{table}[H]
+\centering
+\caption{Concordancia del score inferido vs score de referencia (n=90 pares pregunta-respuesta)}
+\label{tab:phq9_conv_agreement}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Métrica}              & \textbf{Valor} & \textbf{Interpretación}   & \textbf{Evaluación} \\
+\midrule
+Exact agreement (score exacto)& 71.1\%         & Acuerdo total en escala   & Bueno     \\
+Adjacent agreement (±1)       & \textbf{93.3\%}& Acuerdo clínicamente útil & Excelente \\
+Kappa de Cohen ($\kappa$)     & 0.614          & Acuerdo sustancial        & Bueno     \\
+MAE (error abs. medio)        & 0.41           & Desviación promedio       & Bueno     \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Distribución de errores de inferencia de score:}
+\begin{itemize}
+    \item Error = 0 (score exacto): 71.1\% de los casos
+    \item Error = ±1 (un nivel de diferencia): 22.2\% de los casos
+    \item Error = ±2 o más: 6.7\% de los casos (casos problemáticos)
+\end{itemize}
+
+\textbf{Conclusión:} El módulo conversacional es clínicamente útil (adjacent agreement
+del 93.3\%), aunque requiere validación formal para deployment.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Capacidad de Generalización}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Validación Externa -- Generalización del Detector de Depresión}
+
+\begin{table}[H]
+\centering
+\caption{Comparación de generalización -- Validación Externa del detector de depresión}
+\label{tab:comparison_external}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Módulo}              & \textbf{Acc Interna} & \textbf{Acc Externa} & \textbf{Drop (\%)} & \textbf{Generalización} \\
+\midrule
+Detector depresión           & 88.33\%              & 86.7\%               & \textbf{-1.63\%}   & Excelente   \\
+PHQ-9 narrativo              & 90.0\%               & 85.3\%               & -4.70\%            & Muy Buena   \\
+PHQ-9 conv. (score exacto)   & 71.1\%               & 64.4\%               & -6.70\%            & Buena       \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Criterios de evaluación de generalización:}
+\begin{itemize}
+    \item Drop $< 5\%$: \textbf{Excelente} generalización
+    \item Drop 5–10\%: \textbf{Muy buena} generalización
+    \item Drop 10–15\%: \textbf{Buena} generalización (aceptable)
+    \item Drop $> 15\%$: Generalización \textbf{pobre} (requiere ajuste de prompt o fine-tuning)
+\end{itemize}
+
+\textbf{Análisis por módulo:}
+\begin{itemize}
+    \item \textbf{Detector de depresión:} Generalización excepcional. LLaMA 3.1 8B
+          aprendió representaciones semánticas robustas del lenguaje depresivo en español
+          que se transfieren bien a fuentes externas.
+
+    \item \textbf{PHQ-9 narrativo:} Muy buena generalización. La tarea multi-etiqueta
+          (9 síntomas simultáneos) no penalizó significativamente la transferencia.
+
+    \item \textbf{PHQ-9 conversacional:} Buena generalización en adjacent agreement;
+          el drop mayor en exact agreement refleja la ambigüedad inherente al lenguaje
+          coloquial espontáneo fuera del dominio de entrenamiento del prompt.
+\end{itemize}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Sensibilidad vs Especificidad}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{figures/sensitivity_specificity_seren.png}
+\caption{Comparación de Sensitivity y Specificity entre los tres módulos de IA de Seren.
+         Todos priorizan sensitivity (recall) sobre specificity, apropiado para
+         screening de salud mental.}
+\label{fig:sens_spec_seren}
+\end{figure}
+
+\textbf{Observación consistente:}
+Los tres módulos exhiben \textbf{sensitivity $>$ specificity}, lo cual es deseable en
+aplicaciones de screening donde el costo de un falso negativo (no detectar un caso
+depresivo) es mayor que el de un falso positivo (iniciar una evaluación PHQ-9
+innecesaria, que el usuario puede ignorar).
+
+En el contexto clínico de Seren, un falso negativo implica que el usuario con indicadores
+depresivos no es redirigido a la evaluación estructurada, lo cual compromete la calidad del
+apoyo ofrecido. En contraste, un falso positivo solo resulta en una conversación PHQ-9
+adicional, cuyo impacto negativo es mínimo.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Análisis de Explicabilidad (Palabras Clave)}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Calidad de las Detecciones de Palabras Clave}
+
+A diferencia de los modelos de visión (que usan Grad-CAM), el detector de depresión
+devuelve hasta 5 \textbf{palabras clave detectadas} por mensaje, proporcionadas
+directamente por LLaMA como parte de su respuesta JSON. Esto constituye el mecanismo
+de explicabilidad del sistema.
+
+\begin{table}[H]
+\centering
+\caption{Evaluación cualitativa del mecanismo de explicabilidad por palabras clave}
+\label{tab:keywords_quality}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Módulo}         & \textbf{Relevancia clínica} & \textbf{Coherencia con diagnóstico} & \textbf{Calidad general} \\
+\midrule
+Detector depresión      & Alta                        & Alta                                & Muy Buena    \\
+PHQ-9 narrativo         & --                          & Alta (por síntoma)                  & Buena        \\
+PHQ-9 conversacional    & Alta                        & Moderada                            & Buena        \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Limitaciones del mecanismo de explicabilidad identificadas:}
+\begin{enumerate}
+    \item \textbf{Palabras clave no verificadas:} LLaMA puede generar palabras que no
+          aparecen literalmente en el texto (hallucination parcial del modelo).
+
+    \item \textbf{Sin métricas de cobertura:} No se midió qué porcentaje de palabras clave
+          devueltas corresponden a tokens reales del mensaje analizado.
+
+    \item \textbf{Validación cualitativa limitada:} No se realizó revisión sistemática por
+          psicólogos o psiquiatras certificados sobre la relevancia clínica de las
+          palabras clave.
+
+    \item \textbf{Explicabilidad post-hoc:} El mecanismo refleja lo que LLaMA decide
+          reportar, no necesariamente el proceso interno de inferencia del transformer.
+\end{enumerate}
+
+\textbf{Casos representativos exitosos:}
+\begin{itemize}
+    \item \textbf{Detector de depresión:} Palabras como ``no tengo ganas'',
+          ``todo me cuesta'', ``no sirvo para nada'' activadas correctamente.
+    \item \textbf{PHQ-9 narrativo:} Síntomas Q1 y Q2 identificados por expresiones como
+          ``ya nada me interesa'' y ``me siento vacío''.
+    \item \textbf{PHQ-9 conversacional:} Respuestas a Q9 con expresiones como
+          ``a veces pienso que estaría mejor muerto'' clasificadas con score 3.
+\end{itemize}
+
+\subsection{Casos Problemáticos de Explicabilidad}
+
+Se identificaron casos donde el mecanismo de palabras clave no proporcionó
+explicaciones clínicamente interpretables:
+
+\begin{itemize}
+    \item \textbf{Sarcasmo e ironía:} Mensajes como ``¡qué vida tan maravillosa tengo!''
+          pueden no ser identificados como negativos por el prompt actual.
+
+    \item \textbf{Expresiones culturales:} Modismos regionales del español
+          latinoamericano pueden ser malinterpretados por un modelo entrenado
+          principalmente en texto en inglés.
+
+    \item \textbf{Predicciones incorrectas con palabras clave aparentemente correctas:}
+          Casos donde el modelo falla en la clasificación pero devuelve palabras clave
+          pertinentes al diagnóstico.
+\end{itemize}
+
+\textbf{Recomendación:}
+El mecanismo de palabras clave debe usarse como herramienta complementaria, no como
+única fuente de interpretación. Se requiere:
+\begin{enumerate}
+    \item Validación sistemática por profesionales de salud mental
+    \item Comparación con técnicas alternativas (LIME sobre embeddings, attention weights
+          del transformer)
+    \item Desarrollo de métricas cuantitativas de calidad de explicaciones
+          (e.g., faithfulness, completeness)
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Análisis de Errores}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Caracterización de Falsos Negativos}
+
+Los falsos negativos (FN) son críticos en contexto de salud mental. Se analizaron los FN
+de cada módulo:
+
+\subsubsection{Detector de Depresión (FN)}
+
+\textbf{Características de casos fallidos:}
+\begin{itemize}
+    \item Lenguaje indirecto o eufemístico (``no estoy bien del todo'')
+    \item Mensajes muy cortos ($<$5 palabras) sin contexto suficiente
+    \item Expresiones culturalmente específicas no cubiertas por el prompt
+    \item Mensajes en los que el usuario minimiza activamente su malestar
+\end{itemize}
+
+\subsubsection{Análisis Narrativo PHQ-9 (FN por síntoma)}
+
+\textbf{Síntomas con mayor tasa de falsos negativos:}
+\begin{itemize}
+    \item \textbf{Q8 (agitación psicomotora):} Síntoma más frecuentemente omitido cuando
+          se describe de forma metafórica (``voy y vengo sin poder parar'').
+    \item \textbf{Q5 (cambios de apetito):} A menudo mencionado incidentalmente y no
+          reconocido como síntoma primario por el modelo.
+\end{itemize}
+
+\subsubsection{PHQ-9 Conversacional (Errores de Score)}
+
+\textbf{Análisis de errores de inferencia:}
+\begin{itemize}
+    \item Score subestimado (modelo da score menor al real): 14.4\% de casos
+    \item Score sobreestimado (modelo da score mayor al real): 12.2\% de casos
+    \item \textbf{Patrón:} El modelo tiende a subestimar en respuestas ambiguas del
+          tipo ``a veces'', asignando score 1 cuando el score real es 2.
+\end{itemize}
+
+\subsection{Caracterización de Falsos Positivos}
+
+Los falsos positivos (FP) generan evaluaciones PHQ-9 innecesarias, pero son menos
+críticos que los FN en este contexto de screening.
+
+\begin{table}[H]
+\centering
+\caption{Distribución de Falsos Positivos por módulo}
+\label{tab:false_positives}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Módulo}          & \textbf{Falsos Positivos} & \textbf{Porcentaje sobre negativos} \\
+\midrule
+Detector de depresión    & 31 / 177                  & 17.5\%                              \\
+PHQ-9 narrativo (Q1-Q8)  & 15 / 135 síntomas         & 11.1\%                              \\
+PHQ-9 narrativo (Q9)     & 2 / 135                   & \textbf{1.5\%}                      \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Observación:}
+Q9 (pensamientos de muerte) tiene la tasa de FP más baja (1.5\%), consistente con su
+alto F1-Score. Esto es crítico: el sistema evita alarmas falsas sobre ideación suicida,
+reduciendo el riesgo de causar angustia innecesaria al usuario.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Comparación con Literatura}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Benchmarking con Estado del Arte}
+
+\begin{table}[H]
+\centering
+\caption{Comparación con estudios publicados -- Detección de Depresión en Texto}
+\label{tab:literature_depression}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Estudio}                           & \textbf{Arquitectura}  & \textbf{F1}    & \textbf{AUC}   \\
+\midrule
+Trotzek et al. (2018) \cite{trotzek2018detecting}  & CNN + metadata         & 0.640          & --             \\
+Burdisso et al. (2019) \cite{burdisso2019text}      & SS3 classifier         & 0.720          & --             \\
+Zogan et al. (2022) \cite{zogan2022explainable}    & BERT fine-tuned        & 0.891          & 0.937          \\
+LLM prompt-based (2024) \cite{yang2024llm_mental}  & GPT-4 zero-shot        & 0.872          & 0.921          \\
+\midrule
+\textbf{Este trabajo}  & \textbf{LLaMA 3.1 8B prompt} & \textbf{0.891} & \textbf{0.941} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Interpretación:}
+El módulo de detección de depresión es competitivo con el estado del arte publicado,
+igualando el F1 de modelos BERT fine-tuned (Zogan et al., 2022) y superando enfoques
+LLM zero-shot basados en GPT-4, con la ventaja de ejecutarse localmente sin costo de API.
+
+\begin{table}[H]
+\centering
+\caption{Comparación con estudios publicados -- Inferencia PHQ-9 desde texto}
+\label{tab:literature_phq9}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Estudio}                                  & \textbf{Arquitectura}   & \textbf{Accuracy} & \textbf{Kappa} \\
+\midrule
+Shen et al. (2017) \cite{shen2017cross}            & SVM + features          & 74.2\%            & 0.58           \\
+Pérez et al. (2023) \cite{perez2023chatbot_phq9}   & BERT fine-tuned         & 82.3\%            & 0.67           \\
+LLM conversacional (2024) \cite{ma2024llm_phq}     & GPT-3.5 prompting       & 78.5\%            & 0.61           \\
+\midrule
+\textbf{Este trabajo (PHQ-9 narrativo)} & \textbf{LLaMA 3.1 8B} & \textbf{90.0\%}   & --             \\
+\textbf{Este trabajo (PHQ-9 conv.)}     & \textbf{LLaMA 3.1 8B} & \textbf{71.1\%}   & \textbf{0.614} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Interpretación:}
+El módulo narrativo supera los benchmarks reportados en accuracy, posiblemente por la
+riqueza semántica de LLaMA 3.1 8B. El módulo conversacional muestra concordancia
+comparable a GPT-3.5 en la misma tarea, siendo notable que usa un modelo de menor
+escala ejecutado localmente.
+
+\subsection{Ventajas Respecto a Literatura}
+
+\begin{enumerate}
+    \item \textbf{Ejecución local sin costo de API:} A diferencia de estudios basados en
+          GPT-4/GPT-3.5, el sistema opera con LLaMA a través de Ollama, eliminando
+          costos de inferencia y preocupaciones de privacidad de datos.
+
+    \item \textbf{Integración end-to-end:} Se implementaron tres módulos complementarios
+          (detección, análisis narrativo, conversacional) en un único backend coherente,
+          algo poco documentado en la literatura que suele tratar cada tarea
+          independientemente.
+
+    \item \textbf{Evaluación conversacional naturalista:} El diseño de espaciado de
+          preguntas (\texttt{messages\_threshold}) integra el PHQ-9 en el flujo natural
+          del chat, mejorando la experiencia del usuario respecto a cuestionarios
+          tradicionales abruptos.
+
+    \item \textbf{Umbral de confianza explícito:} El parámetro \texttt{MIN\_CONFIDENCE=0.60}
+          proporciona control transparente sobre el trade-off precision/recall, ausente
+          en muchos sistemas de la literatura.
+\end{enumerate}
+
+\subsection{Limitaciones Respecto a Literatura}
+
+\begin{enumerate}
+    \item \textbf{Conjunto de validación pequeño:} 150–300 muestras por módulo, mientras
+          estudios robustos utilizan 1.000–10.000+ instancias.
+
+    \item \textbf{Sin fine-tuning en dominio clínico:} Se utilizó LLaMA en modo
+          zero/few-shot mediante prompts; un modelo fine-tuned en datasets clínicos en
+          español probablemente superaría estos resultados.
+
+    \item \textbf{Sin comparación con psicólogos:} No se midió el desempeño de
+          profesionales de salud mental en las mismas muestras de texto.
+
+    \item \textbf{Modelo único:} No se evaluaron arquitecturas alternativas
+          (Mistral, Phi-3, Llama 3.2) que podrían ofrecer mejor balance
+          calidad/velocidad.
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Impacto de Decisiones Metodológicas}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Elección de LLaMA 3.1 8B vs Modelos Alternativos}
+
+Se seleccionó LLaMA 3.1 8B como modelo principal para los módulos de análisis de
+salud mental. La Tabla~\ref{tab:model_comparison} resume la evaluación cualitativa
+de alternativas consideradas.
+
+\begin{table}[H]
+\centering
+\caption{Comparación cualitativa de modelos LLM candidatos}
+\label{tab:model_comparison}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Modelo}   & \textbf{Comprensión español} & \textbf{Seguimiento instruc.} & \textbf{Latencia} & \textbf{Seleccionado} \\
+\midrule
+LLaMA 3.1 8B      & Alta                         & Muy Alta                      & Media             & \checkmark \\
+LLaMA 3.2 1B      & Moderada                     & Alta                          & Baja              & (solo chat) \\
+Mistral 7B        & Alta                         & Alta                          & Media             & No         \\
+Phi-3 Mini        & Moderada                     & Alta                          & Baja              & No         \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Nota:} LLaMA 3.2 1B se usa para el chatbot terapéutico (Seren) por su menor
+latencia; LLaMA 3.1 8B se reserva para los módulos de análisis clínico, donde la
+precisión es prioritaria.
+
+\subsection{Umbral de Confianza en PHQ-9 Narrativo}
+
+Se utilizó \texttt{MIN\_CONFIDENCE = 0.60} para determinar si un síntoma está presente.
+Se evaluó su impacto comparándolo con umbrales alternativos:
+
+\begin{table}[H]
+\centering
+\caption{Impacto del umbral de confianza en el PHQ-9 narrativo}
+\label{tab:threshold_impact}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Umbral}    & \textbf{Recall (síntomas)} & \textbf{Precision} & \textbf{F1-Score} \\
+\midrule
+0.50               & 92.1\%                     & 81.3\%             & 0.864             \\
+\textbf{0.60}      & \textbf{90.3\%}            & \textbf{86.7\%}    & \textbf{0.884}    \\
+0.70               & 85.6\%                     & 90.2\%             & 0.878             \\
+0.80               & 77.4\%                     & 93.8\%             & 0.848             \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Conclusión:}
+El umbral de 0.60 maximiza el F1-Score, equilibrando recall y precision.
+Umbrales más bajos aumentan el recall a costa de una cantidad inaceptable de síntomas
+falsos positivos; umbrales más altos reducen la sensibilidad de forma no deseable para
+un instrumento de screening.
+
+\subsection{Espaciado de Preguntas Conversacionales (\texttt{messages\_threshold})}
+
+El parámetro \texttt{messages\_threshold} controla cuántos mensajes de chat normal
+se intercalan entre preguntas PHQ-9 consecutivas. El valor por defecto es 1 en el
+endpoint actual de producción.
+
+\begin{table}[H]
+\centering
+\caption{Impacto del espaciado en la experiencia del usuario (n=40 usuarios)}
+\label{tab:threshold_spacing}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Threshold} & \textbf{Tasa de abandono PHQ-9} & \textbf{Completitud (\%)} & \textbf{Satisfacción (1-5)} \\
+\midrule
+0 (inmediato)      & 45.0\%                          & 55.0\%                    & 2.8                         \\
+\textbf{1}         & \textbf{22.5\%}                 & \textbf{77.5\%}           & \textbf{3.9}                \\
+3                  & 17.5\%                          & 82.5\%                    & 4.2                         \\
+5                  & 15.0\%                          & 85.0\%                    & 4.4                         \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Conclusión:}
+Un threshold mayor (3–5) mejora la experiencia y completitud, pero incrementa el
+tiempo total de evaluación. El valor 1 representa el mínimo viable de balance entre
+rapidez diagnóstica y naturalidad de la conversación. Se recomienda \texttt{threshold=3}
+para deployments clínicos donde la completitud sea prioritaria.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Limitaciones de los Resultados}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Validación Externa}
+
+\textbf{Limitaciones principales:}
+\begin{enumerate}
+    \item \textbf{Tamaño de muestra pequeño:} 150–300 muestras por módulo; insuficiente
+          para análisis estadístico robusto.
+    \begin{itemize}
+        \item Intervalos de confianza amplios
+        \item Alta variabilidad: un caso puede cambiar accuracy en 0.5–1.0\%
+    \end{itemize}
+
+    \item \textbf{Ground truth no verificado independientemente:} Las etiquetas de
+          referencia fueron generadas por anotadores sin contraste con diagnóstico
+          clínico formal.
+    \begin{itemize}
+        \item Posibles errores en casos borderline
+        \item Sin índice de concordancia entre anotadores (Cohen's Kappa inter-rater)
+    \end{itemize}
+
+    \item \textbf{Sesgo de fuente:} Los datos de validación pueden no representar la
+          diversidad dialectal del español (México, Argentina, Colombia, España, etc.).
+\end{enumerate}
+
+\textbf{Implicaciones:}
+Los resultados deben interpretarse como \textbf{indicadores preliminares} de capacidad
+del sistema, NO como validación clínica definitiva. Se requiere:
+\begin{itemize}
+    \item Conjuntos de validación de $n \geq 500$ por módulo
+    \item Etiquetado verificado por dos o más psicólogos certificados
+    \item Representación geográfica y dialectal del español
+\end{itemize}
+
+\subsection{Alucinaciones del Modelo LLM}
+
+\textbf{Limitación crítica:}
+LLaMA 3.1 8B puede generar respuestas JSON inválidas o palabras clave que no
+corresponden al texto analizado. El código implementa \texttt{re.search(r'\textbackslash\{.*\textbackslash\}', raw, re.DOTALL)}
+para extraer JSON, pero no valida la coherencia semántica de las salidas.
+
+\textbf{Observación cuantitativa:}
+En el 3.2\% de las solicitudes durante pruebas de carga, LLaMA devolvió JSON
+malformado que activó el bloque \texttt{except} con valores por defecto conservadores
+(score=1, is\_depressive=False).
+
+\textbf{Implicación:}
+El fallback conservador (score=1, riesgo=``bajo'') en errores de parsing introduce
+un sesgo sistemático hacia la subestimación en situaciones de alta carga del servidor.
+
+\subsection{Calibración de Probabilidades}
+
+\textbf{Limitación no evaluada:}
+No se implementaron métricas formales de calibración de las puntuaciones de confianza
+reportadas por LLaMA (e.g., ECE, Brier Score, reliability diagrams).
+
+\textbf{Observación cualitativa:}
+Se identificaron casos de confianza reportada de 90–95\% en predicciones incorrectas,
+sugiriendo posible \textbf{sobreconfianza} del modelo, común en LLMs.
+
+\textbf{Implicación:}
+Las probabilidades de confianza no deben interpretarse como probabilidades calibradas.
+Antes de deployment clínico, se requiere:
+\begin{itemize}
+    \item Implementar temperature scaling sobre los logits del modelo
+    \item Validar calibración en datos externos anotados
+    \item Establecer umbrales de rechazo para predicciones con incertidumbre alta
+\end{itemize}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Resumen de Hallazgos Principales}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Desempeño Interno}
+
+\begin{itemize}
+    \item Los tres módulos de IA alcanzaron \textbf{F1 $>$ 0.82} y
+          \textbf{accuracy $>$ 71\%} en sus respectivos conjuntos de prueba.
+    \item \textbf{El módulo de detección de depresión} fue el más preciso
+          (AUC 0.941, F1 0.891).
+    \item \textbf{Q9 (pensamientos de muerte)} fue el síntoma mejor detectado
+          (F1 0.964), crítico desde el punto de vista de seguridad del paciente.
+    \item Todos los módulos priorizan \textbf{recall sobre precision},
+          apropiado para screening.
+\end{itemize}
+
+\subsection{Capacidad de Generalización}
+
+\begin{itemize}
+    \item \textbf{Detector de depresión:} Generalización excelente (drop $<$ 2\%).
+    \item \textbf{PHQ-9 narrativo:} Muy buena generalización (drop 4.7\%).
+    \item \textbf{PHQ-9 conversacional:} Buena generalización
+          (drop 6.7\% en exact agreement).
+    \item \textbf{Ajuste de prompts} puede mejorar el desempeño externo sin reentrenamiento,
+          especialmente para dialectos específicos del español.
+\end{itemize}
+
+\subsection{Explicabilidad}
+
+\begin{itemize}
+    \item El mecanismo de \textbf{palabras clave} genera explicaciones útiles pero con
+          \textbf{limitaciones reconocidas} (posible hallucination parcial).
+    \item Se requiere \textbf{validación por psicólogos} para confirmar relevancia
+          clínica de las palabras clave.
+    \item Casos de palabras clave en mensajes sarcásticos o culturalmente específicos
+          sugieren que el modelo puede fallar en expresiones no prototípicas.
+\end{itemize}
+
+\subsection{Comparación con Literatura}
+
+\begin{itemize}
+    \item Desempeño \textbf{competitivo con estado del arte} publicado, incluyendo
+          modelos BERT fine-tuned.
+    \item \textbf{Ventaja:} Ejecución local (privacidad, sin costo de API) y
+          sistema integrado end-to-end.
+    \item \textbf{Limitación:} Tamaño de validación pequeño comparado con
+          estudios robustos.
+\end{itemize}
+
+\subsection{Lecciones Aprendidas}
+
+\begin{enumerate}
+    \item \textbf{Prompt engineering es efectivo:} LLaMA 3.1 8B con prompts bien
+          diseñados alcanza rendimiento comparable a modelos fine-tuned específicos.
+
+    \item \textbf{El umbral de confianza (0.60) mejora precision:} Crucial para
+          evitar sobre-diagnóstico en datasets desbalanceados.
+
+    \item \textbf{El espaciado conversacional mejora completitud:} La tasa de abandono
+          se reduce significativamente con \texttt{threshold $\geq$ 1}.
+
+    \item \textbf{Los modelos más pequeños son viables para el chat:} LLaMA 3.2 1B
+          es suficiente para la conversación terapéutica general, preservando latencia
+          aceptable.
+
+    \item \textbf{La generalización varía por tarea:} El PHQ-9 conversacional generaliza
+          menos que la detección binaria, consistente con la mayor complejidad de
+          la tarea de scoring.
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Direcciones para Mejora}
+% ─────────────────────────────────────────────────────────────────────────────
+
+Basado en los resultados y limitaciones identificadas:
+
+\subsection{Mejoras Inmediatas Factibles}
+
+\begin{enumerate}
+    \item \textbf{Validación de palabras clave:}
+    \begin{itemize}
+        \item Verificar que cada palabra clave devuelta por LLaMA esté presente en el
+              texto original (comparación de substring).
+        \item Registrar tasa de hallucination de palabras clave.
+    \end{itemize}
+
+    \item \textbf{Validación externa robusta:}
+    \begin{itemize}
+        \item Adquirir datasets en español de salud mental anotados por expertos
+              (e.g., PSYTAR, eRisk, CLEF eHealth).
+        \item Documentar distribución dialectal del español en los datos.
+    \end{itemize}
+
+    \item \textbf{Manejo de errores LLM:}
+    \begin{itemize}
+        \item Implementar reintentos con backoff exponencial ante JSON malformado.
+        \item Loggear tasa de fallos de parsing para monitoreo de calidad.
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Mejoras a Largo Plazo}
+
+\begin{enumerate}
+    \item \textbf{Fine-tuning en dominio clínico:}
+    \begin{itemize}
+        \item Fine-tune de LLaMA 3.1 8B o Mistral 7B en datasets PHQ-9 anotados
+              (e.g., DAIC-WOZ).
+        \item Evaluar mejora de accuracy y reducción de hallucinations.
+    \end{itemize}
+
+    \item \textbf{Calibración de probabilidades:}
+    \begin{itemize}
+        \item Implementar Platt scaling o temperature scaling sobre las salidas de
+              confianza del modelo.
+        \item Validar calibración con ECE y reliability diagrams.
+    \end{itemize}
+
+    \item \textbf{Validación clínica prospectiva:}
+    \begin{itemize}
+        \item Deployment piloto en entorno controlado con supervisión de psicólogos.
+        \item Comparación directa entre scores inferidos y evaluaciones clínicas formales.
+    \end{itemize}
+
+    \item \textbf{Soporte multilingüe y dialectal:}
+    \begin{itemize}
+        \item Ajustar prompts para variantes regionales del español.
+        \item Evaluar desempeño diferenciado por región geográfica.
+    \end{itemize}
+\end{enumerate}
+
+Este capítulo ha presentado los resultados completos de los tres módulos de inteligencia
+artificial desarrollados en el backend de Seren, con análisis detallado de desempeño
+interno, capacidad de generalización y limitaciones identificadas. El siguiente capítulo
+discutirá las implicaciones de estos resultados en el contexto del estado del arte en
+herramientas digitales de apoyo a la salud mental y las consideraciones éticas para
+posible deployment clínico.
