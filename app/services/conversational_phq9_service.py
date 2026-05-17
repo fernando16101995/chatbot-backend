@@ -7,7 +7,7 @@ import httpx
 import json
 from typing import Optional, Dict
 from sqlalchemy.orm import Session
-from app.models.assessment import PHQ9ConversationalAssessment, MentalHealthSummary
+from app.models.assessment import PHQ9ConversationalAssessment, MentalHealthSummary, PHQ9Assessment
 from app.models.user import User
 from datetime import datetime
 
@@ -283,7 +283,34 @@ Responde SOLO con un JSON:
         assessment.severity = self._calculate_severity(total)
         assessment.is_active = False
         assessment.completed_at = datetime.utcnow()
-        
+
+        # Guardar en phq9_assessments para historial unificado
+        phq9_record = PHQ9Assessment(
+            user_id=assessment.user_id,
+            narrative_text="Evaluación conversacional PHQ-9",
+            q1_interest=1 if assessment.q1_score > 0 else 0,
+            q2_depressed=1 if assessment.q2_score > 0 else 0,
+            q3_sleep=1 if assessment.q3_score > 0 else 0,
+            q4_energy=1 if assessment.q4_score > 0 else 0,
+            q5_appetite=1 if assessment.q5_score > 0 else 0,
+            q6_failure=1 if assessment.q6_score > 0 else 0,
+            q7_concentration=1 if assessment.q7_score > 0 else 0,
+            q8_movement=1 if assessment.q8_score > 0 else 0,
+            q9_suicide=1 if assessment.q9_score > 0 else 0,
+            q1_confidence=assessment.q1_score / 3.0,
+            q2_confidence=assessment.q2_score / 3.0,
+            q3_confidence=assessment.q3_score / 3.0,
+            q4_confidence=assessment.q4_score / 3.0,
+            q5_confidence=assessment.q5_score / 3.0,
+            q6_confidence=assessment.q6_score / 3.0,
+            q7_confidence=assessment.q7_score / 3.0,
+            q8_confidence=assessment.q8_score / 3.0,
+            q9_confidence=assessment.q9_score / 3.0,
+            total_score=total,
+            severity=assessment.severity,
+        )
+        db.add(phq9_record)
+
         # Actualizar resumen del usuario
         self._update_user_summary(db, assessment.user_id, total, assessment.severity)
         
