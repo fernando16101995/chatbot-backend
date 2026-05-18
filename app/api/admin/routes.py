@@ -1,10 +1,13 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timedelta
 from app.core.dependencies import get_current_admin, get_db
 from app.models.user import User
 from app.models.chat_message import ChatMessage
+
 from app.models.assessment import (
     PHQ9Assessment,
     DepressionDetection,
@@ -281,3 +284,85 @@ def get_high_risk_users(
         "total_high_risk": len(users_data),
         "users": users_data
     }
+
+
+class UpdateUserRequest(BaseModel):
+    email: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_admin: Optional[bool] = None
+
+
+@router.put("/dashboard/user/{user_id}")
+def update_user(
+    user_id: int,
+    request: UpdateUserRequest,
+    admin_email: str = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Actualiza email, estado activo o rol de administrador de un usuario.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    if request.email is not None:
+        existing = db.query(User).filter(
+            User.email == request.email,
+            User.id != user_id
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="El email ya está en uso")
+        user.email = request.email
+
+    if request.is_active is not None:
+        user.is_active = request.is_active
+
+    if request.is_admin is not None:
+        user.is_admin = request.is_admin
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "message": "Usuario actualizado correctamente",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "is_active": user.is_active,
+            "is_admin": user.is_admin
+        }
+    }
+
+
+@router.delete("/dashboard/user/{user_id}")
+def delete_user(
+    user_id: int,
+    admin_email: str = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Elimina un usuario de la base de datos.
+    No se puede eliminar la propia cuenta del administrador.
+    """
+    admin = db.query(User).filter(User.email == admin_email).first()
+    if admin and admin.id == user_id:
+        raise HTTPException(status_code=400, detail="No puedes eliminar tu propia cuenta")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    email = user.email
+
+    # Eliminar registros relacionados en orden correcto (respetar FKs)
+    db.query(DepressionDetection).filter(DepressionDetection.user_id == user_id).delete()
+    db.query(ChatMessage).filter(ChatMessage.user_id == user_id).delete()
+    db.query(PHQ9Assessment).filter(PHQ9Assessment.user_id == user_id).delete()
+    db.query(PHQ9ConversationalAssessment).filter(PHQ9ConversationalAssessment.user_id == user_id).delete()
+    db.query(MentalHealthSummary).filter(MentalHealthSummary.user_id == user_id).delete()
+
+    db.delete(user)
+    db.commit()
+
+    return {"message": f"Usuario {email} eliminado correctamente"}
