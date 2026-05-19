@@ -3,13 +3,21 @@ Servicio PHQ-9 usando LLaMA.
 Analiza narrativas largas del usuario y predice síntomas PHQ-9.
 """
 
+import asyncio
 import httpx
 import json
+import logging
 import re
 from typing import Dict, List
 from sqlalchemy.orm import Session
 from app.models.assessment import PHQ9Assessment, MentalHealthSummary
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+# Reintentos con backoff exponencial para errores de parsing JSON
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 1.0  # segundos
 
 class PHQ9Service:
     # Las 9 preguntas oficiales del PHQ-9
@@ -65,9 +73,31 @@ class PHQ9Service:
         self.ollama_url = ollama_url
         self.model = "llama3.1:8b"
     
+    async def _call_llama(self, client: httpx.AsyncClient, prompt: str) -> Dict:
+        """
+        Llama a LLaMA y parsea el JSON de la respuesta.
+        Lanza ValueError si el JSON está malformado.
+        """
+        response = await client.post(
+            f"{self.ollama_url}/api/generate",
+            json={
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json"
+            }
+        )
+        result = response.json()
+        raw = result['response']
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if not match:
+            raise ValueError(f"No se encontró JSON en la respuesta de LLaMA: {raw[:200]}")
+        return json.loads(match.group())
+
     async def analyze_narrative(self, text: str, user_id: int, db: Session) -> Dict:
         """
         Analiza un texto narrativo largo del usuario y detecta síntomas PHQ-9.
+        Reintenta hasta _MAX_RETRIES veces con backoff exponencial ante JSON malformado.
         """
         
         # Crear lista de síntomas para el prompt
@@ -96,78 +126,74 @@ Responde SOLO con este formato JSON:
     ]
 }}"""
 
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{self.ollama_url}/api/generate",
-                    json={
-                        "model": self.model,
-                        "prompt": prompt,
-                        "stream": False,
-                        "format": "json"
+        last_error: Exception = None
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    analysis = await self._call_llama(client, prompt)
+
+                    # Procesar resultados
+                    assessment_data = {
+                        "user_id": user_id,
+                        "narrative_text": text,
                     }
-                )
-                
-                result = response.json()
-                raw = result['response']
-                match = re.search(r'\{.*\}', raw, re.DOTALL)
-                if not match:
-                    raise ValueError(f"No se encontró JSON en la respuesta de LLaMA: {raw[:200]}")
-                analysis = json.loads(match.group())
-                
-                # Procesar resultados
-                assessment_data = {
-                    "user_id": user_id,
-                    "narrative_text": text,
-                }
-                
-                total_score = 0
-                MIN_CONFIDENCE = 0.60  # Solo contar síntomas con 60%+ de confianza
-                
-                for symptom in analysis['sintomas']:
-                    num = symptom['numero']
-                    presente = symptom['presente']
-                    confianza = symptom['confianza'] / 100.0
-                    
-                    q_key = self.QUESTIONS[num - 1]['key']
-                    
-                    # Guardar predicción (0 o 1)
-                    # Solo contar como presente si tiene confianza suficiente
-                    es_presente = presente and confianza >= MIN_CONFIDENCE
-                    assessment_data[q_key] = 1 if es_presente else 0
-                    assessment_data[f"{q_key}_confidence"] = confianza
-                    
-                    if es_presente:
-                        total_score += 1
-                
-                assessment_data['total_score'] = total_score
-                assessment_data['severity'] = self._calculate_severity(total_score)
-                
-                # Guardar en BD
-                assessment = PHQ9Assessment(**assessment_data)
-                db.add(assessment)
-                
-                # Actualizar resumen del usuario
-                self._update_user_summary(user_id, total_score, assessment_data['severity'], db)
-                
-                db.commit()
-                
-                return {
-                    "assessment_id": assessment.id,
-                    "total_score": total_score,
-                    "severity": assessment_data['severity'],
-                    "symptoms": analysis['sintomas']
-                }
-                
-        except Exception as e:
-            import traceback
-            print(f"❌ Error en análisis PHQ-9 (user={user_id}): {e}")
-            traceback.print_exc()
-            return {
-                "error": str(e),
-                "total_score": 0,
-                "severity": "unknown"
-            }
+
+                    total_score = 0
+                    MIN_CONFIDENCE = 0.60  # Solo contar síntomas con 60%+ de confianza
+
+                    for symptom in analysis['sintomas']:
+                        num = symptom['numero']
+                        presente = symptom['presente']
+                        confianza = symptom['confianza'] / 100.0
+
+                        q_key = self.QUESTIONS[num - 1]['key']
+
+                        # Guardar predicción (0 o 1)
+                        # Solo contar como presente si tiene confianza suficiente
+                        es_presente = presente and confianza >= MIN_CONFIDENCE
+                        assessment_data[q_key] = 1 if es_presente else 0
+                        assessment_data[f"{q_key}_confidence"] = confianza
+
+                        if es_presente:
+                            total_score += 1
+
+                    assessment_data['total_score'] = total_score
+                    assessment_data['severity'] = self._calculate_severity(total_score)
+
+                    # Guardar en BD
+                    assessment = PHQ9Assessment(**assessment_data)
+                    db.add(assessment)
+
+                    # Actualizar resumen del usuario
+                    self._update_user_summary(user_id, total_score, assessment_data['severity'], db)
+
+                    db.commit()
+
+                    return {
+                        "assessment_id": assessment.id,
+                        "total_score": total_score,
+                        "severity": assessment_data['severity'],
+                        "symptoms": analysis['sintomas']
+                    }
+
+                except (ValueError, json.JSONDecodeError, KeyError) as e:
+                    last_error = e
+                    logger.warning(
+                        "JSON parsing error in PHQ-9 narrative (user=%d, attempt=%d/%d): %s",
+                        user_id, attempt + 1, _MAX_RETRIES, e,
+                    )
+                    if attempt < _MAX_RETRIES - 1:
+                        await asyncio.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
+
+        logger.error(
+            "❌ All %d retries exhausted in PHQ-9 narrative (user=%d): %s",
+            _MAX_RETRIES, user_id, last_error,
+        )
+        return {
+            "error": str(last_error),
+            "total_score": 0,
+            "severity": "unknown"
+        }
     
     def _calculate_severity(self, score: int) -> str:
         """

@@ -3,13 +3,21 @@ Servicio de evaluación PHQ-9 conversacional.
 Integra las preguntas del PHQ-9 de forma natural durante el chat.
 """
 
+import asyncio
 import httpx
 import json
+import logging
 from typing import Optional, Dict
 from sqlalchemy.orm import Session
 from app.models.assessment import PHQ9ConversationalAssessment, MentalHealthSummary
 from app.models.user import User
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+# Reintentos con backoff exponencial para errores de parsing JSON
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 1.0  # segundos
 
 
 class ConversationalPHQ9Service:
@@ -210,7 +218,8 @@ class ConversationalPHQ9Service:
     async def _infer_score(self, user_response: str, question_num: int) -> int:
         """
         Infiere el score PHQ-9 (0-3) de la respuesta del usuario usando IA.
-        
+        Reintenta hasta _MAX_RETRIES veces con backoff exponencial ante JSON malformado.
+
         Escala PHQ-9:
         0 = Ningún día
         1 = Varios días
@@ -236,29 +245,40 @@ Responde SOLO con un JSON:
     "razonamiento": "breve explicación"
 }}"""
 
-        try:
-            async with httpx.AsyncClient(timeout=45.0) as client:
-                response = await client.post(
-                    f"{self.ollama_url}/api/generate",
-                    json={
-                        "model": self.model,
-                        "prompt": prompt,
-                        "stream": False,
-                        "format": "json"
-                    }
-                )
-                
-                result = response.json()
-                analysis = json.loads(result['response'])
-                score = analysis.get('score', 0)
-                
-                # Validar rango
-                return max(0, min(3, score))
-                
-        except Exception as e:
-            print(f"Error infiriendo score: {e}")
-            # Score conservador en caso de error
-            return 1
+        last_error: Exception = None
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    response = await client.post(
+                        f"{self.ollama_url}/api/generate",
+                        json={
+                            "model": self.model,
+                            "prompt": prompt,
+                            "stream": False,
+                            "format": "json"
+                        }
+                    )
+                    result = response.json()
+                    analysis = json.loads(result['response'])
+                    score = analysis.get('score', 0)
+                    # Validar rango
+                    return max(0, min(3, score))
+
+                except (ValueError, json.JSONDecodeError, KeyError) as e:
+                    last_error = e
+                    logger.warning(
+                        "JSON parsing error inferring PHQ-9 score (q=%d, attempt=%d/%d): %s",
+                        question_num, attempt + 1, _MAX_RETRIES, e,
+                    )
+                    if attempt < _MAX_RETRIES - 1:
+                        await asyncio.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
+
+        logger.error(
+            "❌ All %d retries exhausted inferring PHQ-9 score (q=%d): %s",
+            _MAX_RETRIES, question_num, last_error,
+        )
+        # Score conservador en caso de error
+        return 1
     
     async def _finalize_assessment(
         self, 
